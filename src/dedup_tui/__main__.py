@@ -21,6 +21,7 @@ def main(argv=None):
     ap.add_argument("--exclude", action="append", default=[], help="extra dir name to exclude (repeatable)")
     ap.add_argument("--no-rmlint", action="store_true", help="force built-in engine even if rmlint exists")
     ap.add_argument("--no-verify", action="store_true", help="skip re-hash before removing (faster)")
+    ap.add_argument("--no-recheck", action="store_true", help="skip the post-apply re-scan verification")
     args = ap.parse_args(argv)
 
     excludes = list(DEFAULT_EXCLUDES) + args.exclude
@@ -72,12 +73,28 @@ def main(argv=None):
     log_path = Path.home() / "dedup-tui.log"
     lf = open(log_path, "w")
     lf.write(f"# dedup-tui APPLY {datetime.now().isoformat(timespec='seconds')}\n")
-    removed, skipped = core.apply_decisions(
+    removed, skipped, failed = core.apply_decisions(
         decisions, verify=not args.no_verify, log=lambda m: lf.write(m + "\n")
     )
     lf.close()
-    print(f"Done. quarantined={removed} skipped={skipped}.")
+    msg = f"Done. quarantined={removed} skipped={skipped}"
+    if failed:
+        msg += f" failed={failed} (see log)"
+    print(msg + ".")
     print(f"Recoverable under {QUARANTINE}. Log: {log_path}")
+
+    # Post-apply verification: re-scan and report what (if anything) remains.
+    if is_dir and not args.no_recheck:
+        print("Verifying (re-scanning for remaining duplicates)…")
+        groups2, _ = do_scan()
+        remaining = sum(1 for g in groups2
+                        if len([m for j, m in enumerate(g.members)
+                                if not core.excluded(m, excludes)]) > 1)
+        if remaining == 0:
+            print("✓ Verified: no removable duplicates remain.")
+        else:
+            print(f"⚠ {remaining} duplicate groups still removable "
+                  f"(likely failures or excluded paths) — re-run to address.")
 
 
 def g_size_for(decision):

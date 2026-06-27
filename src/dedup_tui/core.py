@@ -282,23 +282,71 @@ def _same_dir(a: str, b: str) -> bool:
     return snap(a) == snap(b)
 
 
+def _clear_immutable(path: str):
+    """Best-effort: clear macOS uchg (user-immutable) flag so the file can be moved."""
+    try:
+        import stat
+        st = os.lstat(path)
+        flags = getattr(st, "st_flags", 0)
+        UF_IMMUTABLE = 0x00000002
+        if flags & UF_IMMUTABLE and hasattr(os, "chflags"):
+            os.chflags(path, flags & ~UF_IMMUTABLE)
+    except OSError:
+        pass
+
+
 def quarantine(path: str) -> str:
-    """Move path into the quarantine tree, preserving its absolute location."""
-    # Build dest = QUARANTINE / <path without drive/anchor>
+    """Move path into the quarantine tree, preserving its absolute location.
+
+    On failure leaves the ORIGINAL intact and removes any half-written copy in
+    quarantine, so we never end up with the file in both places.
+    """
     pp = Path(path)
     rel = Path(*pp.parts[1:]) if pp.is_absolute() else pp
     dest = QUARANTINE / rel
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(path, str(dest))
+    try:
+        shutil.move(path, str(dest))
+    except PermissionError:
+        # common macOS cause: user-immutable flag — clear and retry once
+        _clear_immutable(path)
+        try:
+            shutil.move(path, str(dest))
+        except (OSError, shutil.Error):
+            _cleanup_partial(dest, path)
+            raise
+    except (OSError, shutil.Error):
+        _cleanup_partial(dest, path)
+        raise
     return str(dest)
+
+
+def _cleanup_partial(dest: Path, original: str):
+    """If move copied to quarantine but failed to delete the original, drop the copy.
+
+    The copy may itself be immutable (copy2 preserves flags), so clear that first.
+    """
+    try:
+        if os.path.exists(original) and dest.exists():
+            if dest.is_dir():
+                for root, _, files in os.walk(str(dest)):
+                    for f in files:
+                        _clear_immutable(os.path.join(root, f))
+                shutil.rmtree(dest, ignore_errors=True)
+            else:
+                _clear_immutable(str(dest))
+                os.unlink(dest)
+    except OSError:
+        pass
 
 
 def apply_decisions(decisions, verify=True, log=None):
     """decisions: list of (keeper, victims, kind, new_path|None).
 
-    Returns (removed, skipped).
+    Fault-tolerant: a failure on one file is recorded and skipped; it never
+    aborts the whole run. Returns (removed, skipped, failed).
     """
-    removed = skipped = 0
+    removed = skipped = failed = 0
     for keeper, victims, kind, new_path in decisions:
         if not os.path.exists(keeper):
             if log: log(f"!! keeper vanished, skip group: {keeper}")
@@ -308,16 +356,29 @@ def apply_decisions(decisions, verify=True, log=None):
             if not os.path.exists(v):
                 continue
             if verify:
-                ok = _same_dir(keeper, v) if kind == "dir" else _same_file(keeper, v)
+                try:
+                    ok = _same_dir(keeper, v) if kind == "dir" else _same_file(keeper, v)
+                except OSError as e:
+                    if log: log(f"FAIL verify ({e}): {v}")
+                    failed += 1
+                    continue
                 if not ok:
                     if log: log(f"SKIP (content differs now): {v}")
                     skipped += 1
                     continue
-            dest = quarantine(v)
-            if log: log(f"MOVED {v} -> {dest}")
-            removed += 1
+            try:
+                dest = quarantine(v)
+                if log: log(f"MOVED {v} -> {dest}")
+                removed += 1
+            except (OSError, shutil.Error) as e:
+                if log: log(f"FAIL remove ({e}): {v}")
+                failed += 1
         if new_path and os.path.exists(keeper):
-            os.makedirs(os.path.dirname(new_path), exist_ok=True)
-            shutil.move(keeper, new_path)
-            if log: log(f"RENAMED keeper {keeper} -> {new_path}")
-    return removed, skipped
+            try:
+                os.makedirs(os.path.dirname(new_path), exist_ok=True)
+                shutil.move(keeper, new_path)
+                if log: log(f"RENAMED keeper {keeper} -> {new_path}")
+            except (OSError, shutil.Error) as e:
+                if log: log(f"FAIL rename keeper ({e}): {keeper}")
+                failed += 1
+    return removed, skipped, failed
