@@ -6,16 +6,16 @@ Works on macOS, Linux, and Windows. No manual pre-scan step — point it at a di
 
 ## Install / run
 
-With [uv](https://docs.astral.sh/uv/) (no install, ephemeral):
+From a clone of this repo, with [uv](https://docs.astral.sh/uv/) (no install, ephemeral):
 
 ```bash
-uvx --from /Users/aleckx/tools/dedup-tui dedup-tui /path/to/dir
+uvx --from . dedup-tui /path/to/dir
 ```
 
 Or install as a persistent tool:
 
 ```bash
-uv tool install /Users/aleckx/tools/dedup-tui     # or: pipx install /Users/aleckx/tools/dedup-tui
+uv tool install .          # or: pipx install .
 dedup-tui /path/to/dir
 ```
 
@@ -32,21 +32,21 @@ Options: `--exclude NAME` (extra dir to skip, repeatable) · `--no-rmlint` (forc
 
 ## TUI keys
 
-Arrow keys are primary; **WASD** are fallbacks for keyboards without arrows.
+The UI has two panels: the **group list** (left) and the **files in the selected group** (right). Arrow keys are primary; **WASD** are fallbacks for keyboards without arrows.
 
 | Key | Action |
 |---|---|
-| ↑/↓ (or w/s) | move between groups |
-| ←/→ (or a/d) | move the highlighted file within the current group |
+| ↑/↓ (or w/s) | move the row in the **focused** panel (left = pick group, right = pick file) |
+| ←/→ (or a/d) | switch focus between the left and right panel |
 | space | toggle keep/drop on the highlighted file — **multiple keepers allowed**, at least 1 enforced |
 | r | reset all groups to default (keep most-original only) |
 | f | toggle filter: show only groups ≥ 10 MB |
 | x | apply (build the plan and exit) |
-| q | quit without applying |
+| q / Esc | quit without applying |
 
-By default each group keeps only its most-original copy (★). Use ←/→ to land on another copy and `space` to also keep it (or to drop a copy). You can keep several copies of the same content if you need duplicates in different locations.
+The focused panel is highlighted. Start on the left, move to a group with ↑/↓, press → to step into its files, use ↑/↓ to land on a copy and `space` to keep/drop it. By default each group keeps only its most-original copy (★); you can keep several if you need duplicates in different locations.
 
-The status bar shows total groups, how many are shown, and the space reclaimed if applied.
+The status bar shows total groups, how many are shown, and the space reclaimed if applied. The header shows the product name and running version (`Duplicate Finder · vX.Y.Z`).
 
 ## "Most original" rule
 

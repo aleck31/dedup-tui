@@ -15,42 +15,47 @@ from textual.containers import Horizontal, VerticalScroll
 from textual.events import Key
 from textual.widgets import DataTable, Footer, Header, Static
 
+from . import __version__
 from .core import Group, human, fmt_date, excluded
 
 
 class DedupApp(App):
+    TITLE = "Duplicate Finder"
+    SUB_TITLE = f"v{__version__}"
     CSS = """
     #status { background: $boost; color: $text; padding: 0 1; height: 1; }
     #table { height: 1fr; width: 50%; }
     #detail-scroll { height: 1fr; width: 50%; border-left: solid $primary; padding: 0 1; }
     #detail-head { width: 100%; height: auto; }
     #members { height: 1fr; width: 100%; }
+    /* highlight the focused panel so it's clear where ↑/↓ act */
+    DataTable:focus { background: $boost; }
     """
     # Arrow keys are primary; WASD are fallbacks for keyboards without arrows.
-    # key_display forces the Footer to show the arrow glyphs (not "right"/"left").
+    # ↑/↓ move the row in the focused panel; ←/→ switch focus between panels.
     BINDINGS = [
-        Binding("up,w", "row_up", "group", show=True, key_display="↑/↓"),
-        Binding("down,s", "row_down", "group", show=False),
-        Binding("right,d", "member_next", "file", show=True, key_display="←/→"),
-        Binding("left,a", "member_prev", "file", show=False),
+        Binding("up,w", "nav_up", "row", show=True, key_display="↑/↓"),
+        Binding("down,s", "nav_down", "row", show=False),
+        Binding("left,a", "focus_left", "panel", show=True, key_display="←/→"),
+        Binding("right,d", "focus_right", "panel", show=False),
         Binding("space", "toggle_keep", "keep/drop", show=True, key_display="space"),
         Binding("f", "filter", "filter>10MB", show=True),
         Binding("r", "all_default", "reset", show=True),
         Binding("x", "apply", "apply", show=True),
-        Binding("q", "quit", "quit", show=True),
+        Binding("q,escape", "quit", "quit", show=True, key_display="q/esc"),
     ]
 
     def on_key(self, event: Key) -> None:
-        # The focused DataTable would otherwise swallow arrows/wasd for nav/scroll;
-        # intercept here so they always drive group / intra-group navigation.
+        # A focused DataTable swallows arrows/wasd for its own cursor; intercept
+        # here so ↑/↓ move the row in the focused panel and ←/→ switch panels.
         if event.key in ("left", "a"):
-            event.stop(); event.prevent_default(); self._move_member(-1)
+            event.stop(); event.prevent_default(); self._focus_panel("table")
         elif event.key in ("right", "d"):
-            event.stop(); event.prevent_default(); self._move_member(+1)
+            event.stop(); event.prevent_default(); self._focus_panel("members")
         elif event.key in ("up", "w"):
-            event.stop(); event.prevent_default(); self.action_row_up()
+            event.stop(); event.prevent_default(); self._nav(-1)
         elif event.key in ("down", "s"):
-            event.stop(); event.prevent_default(); self.action_row_down()
+            event.stop(); event.prevent_default(); self._nav(+1)
 
     _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
@@ -151,6 +156,7 @@ class DedupApp(App):
         self._rebuild_table()
         self._update_status()
         self._update_detail()
+        self.set_focus(self.query_one("#table", DataTable))   # start on the group list
 
     # ------------------------------------------------------------------ table
     def _rebuild_table(self):
@@ -227,7 +233,7 @@ class DedupApp(App):
         nkeep = sum(self.keep_flags[gi])
         head.update(
             f"Group #{gi + 1} · {g.kind} · {human(g.size)} each · keeping {nkeep}\n"
-            "←/→ move · space toggle keep/drop (≥1 required)"
+            "→ focus here · ↑/↓ pick file · space keep/drop (≥1 required)"
         )
         if rebuild:
             # group changed → repopulate the members table and seat the cursor
@@ -260,23 +266,44 @@ class DedupApp(App):
             f" {be}groups {total} · showing {shown}{flt} · reclaim ~{human(kept_waste)}"
         )
 
-    # ------------------------------------------------------------------ actions
-    def action_row_up(self):
-        self.query_one("#table", DataTable).action_cursor_up()
+    # ------------------------------------------------------------------ focus / navigation
+    def _focused_panel(self) -> str:
+        """'members' if the right panel is focused, else 'table' (the default)."""
+        f = self.focused
+        return "members" if (f is not None and f.id == "members") else "table"
+
+    def _focus_panel(self, which: str):
+        """←/→ switch focus between the group table (left) and members table (right)."""
+        target = "#members" if which == "members" else "#table"
+        try:
+            w = self.query_one(target, DataTable)
+        except Exception:
+            return
+        if which == "members" and w.row_count == 0:
+            return  # nothing to focus into
+        if which == "members":
+            gi = self._selected_group()
+            if gi is not None and w.row_count:
+                w.move_cursor(row=min(self.cursor[gi], w.row_count - 1))
+        self.set_focus(w)
+
+    def _nav(self, delta: int):
+        """↑/↓ move the row in whichever panel is focused."""
+        if self._focused_panel() == "members":
+            self._move_member(delta)
+        else:
+            self._move_group(delta)
+
+    def _move_group(self, delta: int):
+        t = self.query_one("#table", DataTable)
+        if delta < 0:
+            t.action_cursor_up()
+        else:
+            t.action_cursor_down()
         self._update_detail(rebuild=True)
-
-    def action_row_down(self):
-        self.query_one("#table", DataTable).action_cursor_down()
-        self._update_detail(rebuild=True)
-
-    def action_member_next(self):
-        self._move_member(+1)
-
-    def action_member_prev(self):
-        self._move_member(-1)
 
     def _move_member(self, delta: int):
-        """←/→ move the highlighted file within the current group (members table auto-scrolls)."""
+        """Move the highlighted file within the current group (members table auto-scrolls)."""
         gi = self._selected_group()
         if gi is None:
             return
