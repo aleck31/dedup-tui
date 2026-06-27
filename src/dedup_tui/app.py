@@ -88,10 +88,10 @@ class DedupApp(App):
         t = self.query_one("#table", DataTable)
         t.add_columns("#", "kind", "size", "keep →")
         m = self.query_one("#members", DataTable)
-        m.add_column("", key="mark")
-        m.add_column("date", key="date")
-        m.add_column("filename", key="filename")
-        m.add_column("path", key="path")
+        m.add_column("", key="mark", width=8)
+        m.add_column("date", key="date", width=10)
+        m.add_column("filename", key="filename", width=22)
+        m.add_column("path", key="path")   # auto-width: takes the differing dir path
         if self.scanning:
             self._scan_timer = self.set_interval(0.1, self._tick_scan)
             self._scan_worker()
@@ -197,20 +197,22 @@ class DedupApp(App):
 
     # ------------------------------------------------------------------ detail panel
     def _member_row(self, gi: int, j: int):
-        """One row in the members table: marker, date, filename, path."""
+        """One row in the members table: marker, date, filename, path(dir)."""
         from rich.text import Text
         full = self.all_groups[gi].members[j]
         keep = self.keep_flags[gi][j]
         star = "★ " if j == 0 else "  "
-        fname = os.path.basename(full.rstrip("/")) or full
+        base = os.path.basename(full.rstrip("/")) or full
+        fname = base if len(base) <= 22 else base[:19] + "…"
+        folder = os.path.dirname(full) or full      # path column shows the directory
         if keep:
             marker = Text(star + "✔ KEEP", style="bold black on green")
             filename = Text(fname, style="green")
-            path = Text(full, style="green")
+            path = Text(folder, style="green")
         else:
             marker = Text(star + " drop ", style="dim")
             filename = Text(fname, style="dim")
-            path = Text(full, style="dim")
+            path = Text(folder, style="dim")
         return (marker, fmt_date(full), filename, path)
 
     def _update_detail(self, rebuild: bool = True):
