@@ -30,7 +30,6 @@ DEFAULT_EXCLUDES = [
 ]
 
 _IS_WIN = platform.system() == "Windows"
-_IS_MAC = platform.system() == "Darwin"
 
 # (keeper, victims, kind) — keeper is the verify reference; victims go to quarantine
 type Decision = tuple[str, list[str], str]
@@ -106,10 +105,39 @@ def have_rmlint() -> bool:
     return shutil.which("rmlint") is not None
 
 
+# (binary to look for, install command) in preference order
+_MAC_INSTALLERS = [("brew", "brew install rmlint"), ("port", "sudo port install rmlint")]
+_LINUX_INSTALLERS = [
+    ("apt-get", "sudo apt-get install rmlint"),
+    ("dnf", "sudo dnf install rmlint"),
+    ("pacman", "sudo pacman -S rmlint"),
+    ("zypper", "sudo zypper install rmlint"),
+    ("apk", "sudo apk add rmlint"),
+    ("brew", "brew install rmlint"),
+]
+_RMLINT_URL = "https://github.com/sahib/rmlint"
+
+
+def rmlint_install_hint() -> str:
+    """Platform-specific way to install rmlint, based on the OS and the package managers present."""
+    match platform.system():
+        case "Darwin":
+            table = _MAC_INSTALLERS
+        case "Linux":
+            table = _LINUX_INSTALLERS
+        case "Windows":
+            return f"no native Windows build; run dedup inside WSL (install rmlint there) or keep the built-in engine — {_RMLINT_URL}"
+        case _:
+            return f"see {_RMLINT_URL}"
+    for binary, cmd in table:
+        if shutil.which(binary):
+            return cmd
+    return f"install it with your package manager — {_RMLINT_URL}"
+
+
 def rmlint_hint() -> str:
-    install = "brew install rmlint" if _IS_MAC else "see https://github.com/sahib/rmlint"
-    return (f"rmlint not found — using the slower built-in engine (no duplicate-directory detection). "
-            f"Install for best results: {install}")
+    return ("rmlint not found — using the slower built-in engine (no duplicate-directory detection). "
+            f"Install for best results: {rmlint_install_hint()}")
 
 
 # Stats parsed from an rmlint JSON footer; .aborted flags an interrupted/partial scan.

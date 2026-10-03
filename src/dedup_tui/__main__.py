@@ -1,4 +1,4 @@
-"""dedup-tui entry point: scan a directory, review duplicates in a TUI, apply safely."""
+"""dedup entry point: `dedup <target>` headless, `dedup tui <target>` interactive."""
 import argparse
 import os
 import sys
@@ -10,20 +10,79 @@ from . import core
 from .core import DEFAULT_EXCLUDES, QUARANTINE, human
 
 
-def main(argv=None):
+DESCRIPTION = """\
+Find duplicate files/directories by content and move the extra copies to a
+recoverable quarantine. The most original copy of each group is kept.
+
+Modes:
+  dedup <target>        headless CLI: scan, keep the most original copy of every
+                        group, print the plan. Dry-run unless --apply is given.
+  dedup tui <target>    interactive full-screen review; pick which copies to keep
+                        (multiple keepers allowed, >=1 enforced). Needs a terminal.
+
+<target> is a directory to scan, or an existing `rmlint -D` JSON report (skips scanning).
+"""
+
+EPILOG = """\
+examples:
+  dedup ~/Downloads                      preview what would be removed (nothing moves)
+  dedup ~/Downloads --apply              remove duplicates, keeping the most original
+  dedup ~/Downloads --exclude build      also protect every path containing a "build" dir
+  dedup tui ~/Downloads --apply          review interactively, then apply the choices
+  dedup report.json --apply              reuse an rmlint report instead of scanning
+
+safety:
+  * Default is dry-run; only --apply changes anything.
+  * Removals are MOVED to ~/dedup-quarantine/<original path> (never deleted); restore
+    by moving them back. Name clashes get a .1, .2 ... suffix.
+  * Each victim is re-hashed against the keeper right before it is moved; a mismatch
+    is skipped (disable with --no-verify). Victims nested in / linked to the keeper
+    are never moved.
+  * Paths under excluded directory names are never removed. Built-in excludes:
+    {excludes}
+  * After --apply the target is re-scanned and leftover duplicates are reported
+    (skip with --no-recheck).
+  * Every apply appends to ~/dedup-tui.log.
+
+"most original": earliest creation time, then earliest mtime, then shortest path.
+
+engine: uses rmlint if on PATH (fast, also detects identical directories), else a
+built-in engine (files only, slower). --no-rmlint forces the built-in one.
+
+exit codes:
+  0  success (including dry-run and "no duplicates")
+  1  error (e.g. target missing, `tui` without a terminal)
+  2  invalid arguments
+  3  --apply finished but some removals failed (details in ~/dedup-tui.log)
+"""
+
+
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="dedup-tui",
-        description="Interactive cross-platform duplicate remover; keeps the most original copy.",
+        prog="dedup",
+        usage="dedup [tui] <target> [--apply] [--exclude NAME] [--no-rmlint] [--no-verify] [--no-recheck]",
+        description=DESCRIPTION,
+        epilog=EPILOG.format(excludes=", ".join(DEFAULT_EXCLUDES)),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("--version", action="version", version=f"%(prog)s {version('dedup-tui')}")
-    ap.add_argument("target", help="directory to scan, or an existing rmlint .json report")
-    ap.add_argument("--apply", action="store_true", help="actually move duplicates (else dry-run)")
-    ap.add_argument("--auto", action="store_true", help="non-interactive: keep most-original everywhere")
-    ap.add_argument("--exclude", action="append", default=[], help="extra dir name to exclude (repeatable)")
-    ap.add_argument("--no-rmlint", action="store_true", help="force built-in engine even if rmlint exists")
-    ap.add_argument("--no-verify", action="store_true", help="skip re-hash before removing (faster)")
-    ap.add_argument("--no-recheck", action="store_true", help="skip the post-apply re-scan verification")
-    args = ap.parse_args(argv)
+    ap.add_argument("target", metavar="target", help="directory to scan, or an rmlint .json report "
+                    "(a directory literally named 'tui' must be passed as ./tui)")
+    ap.add_argument("--apply", action="store_true", help="actually move duplicates to quarantine (default: dry-run)")
+    ap.add_argument("--exclude", metavar="NAME", action="append", default=[],
+                    help="extra directory name (glob ok) whose contents are never removed; repeatable")
+    ap.add_argument("--no-rmlint", action="store_true", help="force the built-in engine even if rmlint is installed")
+    ap.add_argument("--no-verify", action="store_true", help="skip the re-hash before each removal (faster, less safe)")
+    ap.add_argument("--no-recheck", action="store_true", help="skip the post-apply re-scan")
+    return ap
+
+
+def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    tui = bool(argv) and argv[0] == "tui"
+    if tui:
+        argv = argv[1:]
+    args = build_parser().parse_args(argv)
 
     excludes = list(DEFAULT_EXCLUDES) + args.exclude
     target = args.target
@@ -33,6 +92,8 @@ def main(argv=None):
     is_json = os.path.isfile(target) and target.endswith(".json")
     if not (is_dir or is_json):
         sys.exit(f"error: '{target}' is neither a directory nor an rmlint .json report")
+    if tui and not (sys.stdin.isatty() and sys.stdout.isatty()):
+        sys.exit("error: 'tui' needs an interactive terminal; use `dedup <target>` for headless runs")
 
     notice = None if (is_json or args.no_rmlint or core.have_rmlint()) else core.rmlint_hint()
 
@@ -42,7 +103,7 @@ def main(argv=None):
         return core.scan(target, excludes, prefer_rmlint=not args.no_rmlint, progress=progress)
 
     # --- choose decisions ---
-    if args.auto:
+    if not tui:
         # headless: print progress on plain stdout, no TUI
         if notice:
             print(f"note: {notice}", file=sys.stderr)
@@ -52,7 +113,7 @@ def main(argv=None):
         print(f"Backend: {backend}. Found {len(groups)} duplicate groups.")
         if not groups:
             print("No duplicates found. Nothing to do.")
-            return
+            return 0
         decisions = []
         for g in groups:
             keeper = g.members[0]
@@ -66,14 +127,14 @@ def main(argv=None):
         decisions = app.run()
         if not decisions:
             print("No changes (quit without applying).")
-            return
+            return 0
 
     reclaim = sum(g_size_for(d) for d in decisions)
     print(f"\nPlan: {len(decisions)} groups, reclaim ~{human(reclaim)}")
 
     if not args.apply:
         print("(dry-run — not applied. Re-run with --apply to move duplicates to quarantine.)")
-        return
+        return 0
 
     log_path = Path.home() / "dedup-tui.log"
     with open(log_path, "a") as lf:
@@ -99,6 +160,7 @@ def main(argv=None):
         else:
             print(f"⚠ {remaining} duplicate groups still removable "
                   f"(likely failures or excluded paths) — re-run to address.")
+    return 3 if failed else 0
 
 
 def g_size_for(decision):
@@ -112,4 +174,4 @@ def g_size_for(decision):
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

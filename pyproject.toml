@@ -1,6 +1,6 @@
 [project]
 name = "dedup-tui"
-version = "0.7.2"
+version = "0.7.3"
 description = "Cross-platform interactive duplicate-file finder with a TUI; keeps the most original copy."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -8,7 +8,7 @@ license = { text = "MIT" }
 dependencies = ["textual>=0.80"]
 
 [project.scripts]
-dedup-tui = "dedup_tui.__main__:main"
+dedup = "dedup_tui.__main__:main"
 
 [build-system]
 requires = ["hatchling"]

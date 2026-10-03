@@ -9,28 +9,31 @@ Works on macOS, Linux, and Windows. No manual pre-scan step — point it at a di
 From a clone of this repo, with [uv](https://docs.astral.sh/uv/) (no install, ephemeral):
 
 ```bash
-uvx --from . dedup-tui /path/to/dir
+uvx --from . dedup /path/to/dir
 ```
 
 Or install as a persistent tool:
 
 ```bash
 uv tool install .          # or: pipx install .
-dedup-tui /path/to/dir
+dedup /path/to/dir
 ```
 
 ## Usage
 
 ```bash
-dedup-tui <dir>                 # scan + TUI review; dry-run (nothing moved)
-dedup-tui <dir> --apply         # scan + TUI review; apply chosen removals
-dedup-tui <dir> --auto --apply  # non-interactive: keep most-original everywhere, then apply
-dedup-tui <rmlint.json>         # reuse an existing rmlint -D JSON report (skip scanning)
+dedup <dir>                 # headless: keep most-original everywhere; dry-run (nothing moved)
+dedup <dir> --apply         # headless: apply
+dedup tui <dir>             # interactive review in a full-screen TUI; dry-run
+dedup tui <dir> --apply     # interactive review, then apply the chosen removals
+dedup <rmlint.json>         # reuse an existing rmlint -D JSON report (skip scanning)
 ```
 
-`rmlint` is optional: when it is not on PATH the built-in engine is used (slower, no duplicate-directory detection) and a note is shown. On macOS: `brew install rmlint`.
+`dedup --help` documents modes, safety rules, and exit codes (0 ok · 1 error · 2 bad arguments · 3 apply had failures).
 
-Options: `--exclude NAME` (extra dir to skip, repeatable) · `--no-rmlint` (force built-in engine) · `--no-verify` (skip the pre-removal re-hash).
+`rmlint` is optional: when it is not on PATH the built-in engine is used (slower, no duplicate-directory detection) and a note is shown. The note names the install command for your platform (brew/port on macOS; apt, dnf, pacman, zypper, apk or brew on Linux; on Windows there is no native build, so use WSL or stay on the built-in engine).
+
+Options: `--version` · `--exclude NAME` (extra dir to skip, repeatable) · `--no-rmlint` (force built-in engine) · `--no-verify` (skip the pre-removal re-hash).
 
 ## TUI keys
 

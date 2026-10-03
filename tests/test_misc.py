@@ -39,4 +39,4 @@ def test_cli_version_matches_pyproject(capsys):
     meta = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
     with pytest.raises(SystemExit):
         cli.main(["--version"])
-    assert capsys.readouterr().out.strip() == f"dedup-tui {meta['project']['version']}"
+    assert capsys.readouterr().out.strip() == f"dedup {meta['project']['version']}"
