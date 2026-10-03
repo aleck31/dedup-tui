@@ -4,8 +4,6 @@ Uses a virtualized DataTable (one row per group) so it stays fast with thousands
 of groups. Per-group state (chosen keeper index, skip flag) is kept in plain lists,
 NOT in widgets — adding 7000+ widgets would freeze the terminal.
 """
-from __future__ import annotations
-
 import os
 
 from textual import work
@@ -121,10 +119,7 @@ class DedupApp(App):
 
     @work(thread=True, exclusive=True)
     def _scan_worker(self):
-        try:
-            groups, backend = self.scan_fn(self._on_scan_progress)
-        except TypeError:
-            groups, backend = self.scan_fn()
+        groups, backend = self.scan_fn(self._on_scan_progress)
         groups.sort(key=lambda g: g.waste, reverse=True)
         self.call_from_thread(self._scan_done, groups, backend)
 
@@ -363,7 +358,7 @@ class DedupApp(App):
                        if not self.keep_flags[i][j] and not excluded(m, self.excludes)]
             if victims:
                 # keeper passed to apply is just the verify reference; any kept copy works
-                decisions.append((keepers[0], victims, g.kind, None))
+                decisions.append((keepers[0], victims, g.kind))
         self.result = decisions
         self.exit(decisions)
 

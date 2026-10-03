@@ -1,5 +1,4 @@
 """dedup-tui entry point: scan a directory, review duplicates in a TUI, apply safely."""
-from __future__ import annotations
 import argparse
 import os
 import sys
@@ -53,7 +52,7 @@ def main(argv=None):
             keeper = g.members[0]
             victims = [m for m in g.members[1:] if not core.excluded(m, excludes)]
             if victims:
-                decisions.append((keeper, victims, g.kind, None))
+                decisions.append((keeper, victims, g.kind))
     else:
         # TUI scans in the background and shows a "Scanning…" indicator immediately
         from .app import DedupApp
@@ -71,12 +70,11 @@ def main(argv=None):
         return
 
     log_path = Path.home() / "dedup-tui.log"
-    lf = open(log_path, "w")
-    lf.write(f"# dedup-tui APPLY {datetime.now().isoformat(timespec='seconds')}\n")
-    removed, skipped, failed = core.apply_decisions(
-        decisions, verify=not args.no_verify, log=lambda m: lf.write(m + "\n")
-    )
-    lf.close()
+    with open(log_path, "a") as lf:
+        lf.write(f"# dedup-tui APPLY {datetime.now().isoformat(timespec='seconds')}\n")
+        removed, skipped, failed = core.apply_decisions(
+            decisions, verify=not args.no_verify, log=lambda m: lf.write(m + "\n")
+        )
     msg = f"Done. quarantined={removed} skipped={skipped}"
     if failed:
         msg += f" failed={failed} (see log)"
@@ -98,7 +96,7 @@ def main(argv=None):
 
 
 def g_size_for(decision):
-    keeper, victims, kind, _ = decision
+    keeper, victims, kind = decision
     try:
         if kind == "dir":
             return core._dir_size(keeper) * len(victims)

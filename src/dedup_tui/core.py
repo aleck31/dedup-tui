@@ -7,17 +7,17 @@ Two backends:
 "Most original" copy = earliest creation time; ties -> earliest mtime -> shortest path.
 Creation time is platform-aware (see creation_time()).
 """
-from __future__ import annotations
+import fnmatch
 import hashlib
 import json
 import os
 import platform
 import shutil
+import stat
 import subprocess
-import sys
 import tempfile
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -25,12 +25,15 @@ QUARANTINE = Path.home() / "dedup-quarantine"
 
 DEFAULT_EXCLUDES = [
     "node_modules", ".cache", ".venv", "venv", ".git", "__pycache__",
-    ".tox", ".gradle", ".npm", "site-packages", "vendor", ".dist-info",
+    ".tox", ".gradle", ".npm", "site-packages", "vendor", "*.dist-info",
     ".Trash", "$RECYCLE.BIN",
 ]
 
 _IS_WIN = platform.system() == "Windows"
 _IS_MAC = platform.system() == "Darwin"
+
+# (keeper, victims, kind) — keeper is the verify reference; victims go to quarantine
+type Decision = tuple[str, list[str], str]
 
 
 def creation_time(p: os.stat_result | str | os.PathLike) -> float:
@@ -58,9 +61,12 @@ def originality_key(path: str):
         return (float("inf"), float("inf"), float("inf"), path)
 
 
+def _name_excluded(name: str, excludes) -> bool:
+    return any(fnmatch.fnmatchcase(name, e) for e in excludes)
+
+
 def excluded(path: str, excludes) -> bool:
-    parts = Path(path).parts
-    return any(e in parts for e in excludes)
+    return any(_name_excluded(part, excludes) for part in Path(path).parts)
 
 
 def human(n: float) -> str:
@@ -82,7 +88,7 @@ def fmt_date(path: str) -> str:
 # --------------------------------------------------------------------------- #
 # Group model
 # --------------------------------------------------------------------------- #
-@dataclass
+@dataclass(slots=True)
 class Group:
     kind: str               # "file" or "dir"
     members: list[str]      # absolute paths, sorted by originality (index 0 = default keep)
@@ -101,7 +107,7 @@ def have_rmlint() -> bool:
 
 
 # Stats parsed from an rmlint JSON footer; .aborted flags an interrupted/partial scan.
-@dataclass
+@dataclass(slots=True)
 class ScanStats:
     total_files: int = 0
     duplicates: int = 0
@@ -119,20 +125,29 @@ class ScanStats:
 LAST_STATS = ScanStats()
 
 
+class ScanError(RuntimeError):
+    pass
+
+
 def scan_with_rmlint(target: str) -> list[Group]:
-    jf = tempfile.NamedTemporaryFile(prefix="dedup-", suffix=".json", delete=False).name
-    subprocess.run(
-        ["rmlint", target, "-D", "--types=duplicates", f"-o", f"json:{jf}"],
-        capture_output=True, text=True,
-    )
-    if not os.path.exists(jf) or os.path.getsize(jf) == 0:
-        return []
-    return groups_from_rmlint_json(jf)
+    fd, jf = tempfile.mkstemp(prefix="dedup-", suffix=".json")
+    os.close(fd)
+    try:
+        r = subprocess.run(
+            ["rmlint", target, "-D", "--types=duplicates", "-o", f"json:{jf}"],
+            capture_output=True, text=True,
+        )
+        if os.path.getsize(jf) == 0:
+            raise ScanError(f"rmlint produced no report (exit {r.returncode}): {r.stderr.strip()[:200]}")
+        return groups_from_rmlint_json(jf)
+    finally:
+        os.unlink(jf)
 
 
 def groups_from_rmlint_json(jpath: str) -> list[Group]:
     global LAST_STATS
-    data = json.load(open(jpath))
+    with open(jpath) as f:
+        data = json.load(f)
     # footer dict (no "type") carries scan stats incl. the 'aborted' flag
     footer = next((d for d in reversed(data) if "total_files" in d), None)
     if footer:
@@ -148,18 +163,18 @@ def groups_from_rmlint_json(jpath: str) -> list[Group]:
     file_groups: dict[str, list[str]] = defaultdict(list)
     dir_groups: dict[str, list[str]] = defaultdict(list)
     for d in data:
-        t = d.get("type")
-        if t == "duplicate_dir":
-            dir_groups[d["checksum"]].append(d["path"])
-        elif t == "duplicate_file" and not d.get("part_of_directory"):
-            file_groups[d["checksum"]].append(d["path"])
+        match d:
+            case {"type": "duplicate_dir", "checksum": c, "path": p}:
+                dir_groups[c].append(p)
+            case {"type": "duplicate_file", "checksum": c, "path": p} if not d.get("part_of_directory"):
+                file_groups[c].append(p)
     groups: list[Group] = []
     for paths in dir_groups.values():
         dirs = [p for p in dict.fromkeys(paths) if os.path.isdir(p)]
         if len(dirs) > 1:
             groups.append(Group("dir", sorted(dirs, key=originality_key), _dir_size(dirs[0])))
     for paths in file_groups.values():
-        files = [p for p in dict.fromkeys(paths) if os.path.isfile(p)]
+        files = [p for p in dict.fromkeys(paths) if os.path.isfile(p) and not os.path.islink(p)]
         if len(files) > 1:
             try:
                 sz = os.path.getsize(files[0])
@@ -203,7 +218,7 @@ def scan_builtin(target: str, excludes, progress=None) -> list[Group]:
     """Pure-Python file dedup. Skips excluded dirs. progress(done, msg) optional."""
     by_size: dict[int, list[str]] = defaultdict(list)
     for root, dirs, files in os.walk(target):
-        dirs[:] = [d for d in dirs if d not in excludes]
+        dirs[:] = [d for d in dirs if not _name_excluded(d, excludes)]
         for name in files:
             p = os.path.join(root, name)
             try:
@@ -251,7 +266,10 @@ def scan_builtin(target: str, excludes, progress=None) -> list[Group]:
 def scan(target: str, excludes, prefer_rmlint=True, progress=None) -> tuple[list[Group], str]:
     """Return (groups, backend_name)."""
     if prefer_rmlint and have_rmlint():
-        return scan_with_rmlint(target), "rmlint"
+        try:
+            return scan_with_rmlint(target), "rmlint"
+        except ScanError:
+            pass  # fall back to the built-in engine rather than report "no duplicates"
     return scan_builtin(target, excludes, progress=progress), "builtin"
 
 
@@ -282,17 +300,30 @@ def _same_dir(a: str, b: str) -> bool:
     return snap(a) == snap(b)
 
 
+def _nested(a: str, b: str) -> bool:
+    """True if one path is the same as, or inside, the other."""
+    pa, pb = Path(a).resolve(), Path(b).resolve()
+    return pa.is_relative_to(pb) or pb.is_relative_to(pa)
+
+
 def _clear_immutable(path: str):
     """Best-effort: clear macOS uchg (user-immutable) flag so the file can be moved."""
     try:
-        import stat
-        st = os.lstat(path)
-        flags = getattr(st, "st_flags", 0)
-        UF_IMMUTABLE = 0x00000002
-        if flags & UF_IMMUTABLE and hasattr(os, "chflags"):
-            os.chflags(path, flags & ~UF_IMMUTABLE)
+        flags = getattr(os.lstat(path), "st_flags", 0)
+        if flags & stat.UF_IMMUTABLE and hasattr(os, "chflags"):
+            os.chflags(path, flags & ~stat.UF_IMMUTABLE)
     except OSError:
         pass
+
+
+def _unique_dest(dest: Path) -> Path:
+    """Never overwrite an earlier quarantined item: add .1, .2, … if the slot is taken."""
+    if not os.path.lexists(dest):
+        return dest
+    n = 1
+    while os.path.lexists(cand := dest.with_name(f"{dest.name}.{n}")):
+        n += 1
+    return cand
 
 
 def quarantine(path: str) -> str:
@@ -303,7 +334,7 @@ def quarantine(path: str) -> str:
     """
     pp = Path(path)
     rel = Path(*pp.parts[1:]) if pp.is_absolute() else pp
-    dest = QUARANTINE / rel
+    dest = _unique_dest(QUARANTINE / rel)
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         shutil.move(path, str(dest))
@@ -340,20 +371,24 @@ def _cleanup_partial(dest: Path, original: str):
         pass
 
 
-def apply_decisions(decisions, verify=True, log=None):
-    """decisions: list of (keeper, victims, kind, new_path|None).
+def apply_decisions(decisions: list[Decision], verify=True, log=None):
+    """decisions: list of (keeper, victims, kind).
 
     Fault-tolerant: a failure on one file is recorded and skipped; it never
     aborts the whole run. Returns (removed, skipped, failed).
     """
     removed = skipped = failed = 0
-    for keeper, victims, kind, new_path in decisions:
+    for keeper, victims, kind in decisions:
         if not os.path.exists(keeper):
             if log: log(f"!! keeper vanished, skip group: {keeper}")
             skipped += len(victims)
             continue
         for v in victims:
             if not os.path.exists(v):
+                continue
+            if _nested(keeper, v):
+                if log: log(f"SKIP (nested in keeper): {v}")
+                skipped += 1
                 continue
             if verify:
                 try:
@@ -372,13 +407,5 @@ def apply_decisions(decisions, verify=True, log=None):
                 removed += 1
             except (OSError, shutil.Error) as e:
                 if log: log(f"FAIL remove ({e}): {v}")
-                failed += 1
-        if new_path and os.path.exists(keeper):
-            try:
-                os.makedirs(os.path.dirname(new_path), exist_ok=True)
-                shutil.move(keeper, new_path)
-                if log: log(f"RENAMED keeper {keeper} -> {new_path}")
-            except (OSError, shutil.Error) as e:
-                if log: log(f"FAIL rename keeper ({e}): {keeper}")
                 failed += 1
     return removed, skipped, failed
