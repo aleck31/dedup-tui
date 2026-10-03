@@ -3,6 +3,7 @@ import argparse
 import os
 import sys
 from datetime import datetime
+from importlib.metadata import version
 from pathlib import Path
 
 from . import core
@@ -14,6 +15,7 @@ def main(argv=None):
         prog="dedup-tui",
         description="Interactive cross-platform duplicate remover; keeps the most original copy.",
     )
+    ap.add_argument("--version", action="version", version=f"%(prog)s {version('dedup-tui')}")
     ap.add_argument("target", help="directory to scan, or an existing rmlint .json report")
     ap.add_argument("--apply", action="store_true", help="actually move duplicates (else dry-run)")
     ap.add_argument("--auto", action="store_true", help="non-interactive: keep most-original everywhere")
@@ -32,6 +34,8 @@ def main(argv=None):
     if not (is_dir or is_json):
         sys.exit(f"error: '{target}' is neither a directory nor an rmlint .json report")
 
+    notice = None if (is_json or args.no_rmlint or core.have_rmlint()) else core.rmlint_hint()
+
     def do_scan(progress=None):
         if is_json:
             return core.groups_from_rmlint_json(target), "json"
@@ -40,6 +44,8 @@ def main(argv=None):
     # --- choose decisions ---
     if args.auto:
         # headless: print progress on plain stdout, no TUI
+        if notice:
+            print(f"note: {notice}", file=sys.stderr)
         print(f"Scanning {target} …", flush=True)
         groups, backend = do_scan()
         groups.sort(key=lambda g: g.waste, reverse=True)
@@ -56,7 +62,7 @@ def main(argv=None):
     else:
         # TUI scans in the background and shows a "Scanning…" indicator immediately
         from .app import DedupApp
-        app = DedupApp(excludes, scan_fn=do_scan)
+        app = DedupApp(excludes, scan_fn=do_scan, notice=notice)
         decisions = app.run()
         if not decisions:
             print("No changes (quit without applying).")

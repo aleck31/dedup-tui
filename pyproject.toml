@@ -1,6 +1,6 @@
 [project]
 name = "dedup-tui"
-version = "0.7.1"
+version = "0.7.2"
 description = "Cross-platform interactive duplicate-file finder with a TUI; keeps the most original copy."
 readme = "README.md"
 requires-python = ">=3.13"

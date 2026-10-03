@@ -29,3 +29,14 @@ def test_fmt_date_missing():
 
 def test_group_waste():
     assert core.Group("file", ["a", "b", "c"], 10).waste == 20
+
+
+def test_cli_version_matches_pyproject(capsys):
+    import tomllib
+    from pathlib import Path
+    import pytest
+    from dedup_tui import __main__ as cli
+    meta = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
+    with pytest.raises(SystemExit):
+        cli.main(["--version"])
+    assert capsys.readouterr().out.strip() == f"dedup-tui {meta['project']['version']}"

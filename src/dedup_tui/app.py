@@ -5,6 +5,7 @@ of groups. Per-group state (chosen keeper index, skip flag) is kept in plain lis
 NOT in widgets — adding 7000+ widgets would freeze the terminal.
 """
 import os
+from importlib.metadata import version
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -13,13 +14,12 @@ from textual.containers import Horizontal, VerticalScroll
 from textual.events import Key
 from textual.widgets import DataTable, Footer, Header, Static
 
-from . import __version__
 from .core import Group, human, fmt_date, excluded
 
 
 class DedupApp(App):
     TITLE = "Duplicate Finder"
-    SUB_TITLE = f"v{__version__}"
+    SUB_TITLE = f"v{version('dedup-tui')}"  # pyproject.toml is the single source
     CSS = """
     #status { background: $boost; color: $text; padding: 0 1; height: 1; }
     #table { height: 1fr; width: 50%; }
@@ -57,9 +57,10 @@ class DedupApp(App):
 
     _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
-    def __init__(self, excludes, scan_fn=None, groups: list[Group] | None = None):
+    def __init__(self, excludes, scan_fn=None, groups: list[Group] | None = None, notice: str | None = None):
         super().__init__()
         self.excludes = excludes
+        self.notice = notice
         self.scan_fn = scan_fn
         self.all_groups: list[Group] = groups or []
         # keep_flags[g][m] = keep this member? (multiple keepers allowed; ≥1 enforced)
@@ -130,6 +131,8 @@ class DedupApp(App):
         self.all_groups = groups
         self.scanning = False
         self._backend = backend
+        if self.notice:
+            self.notify(self.notice, title="rmlint missing", severity="warning", timeout=15)
         if not groups:
             self.query_one("#status", Static).update(
                 f" No duplicates found (backend: {backend}, {self._elapsed:.0f}s). Press q to quit."

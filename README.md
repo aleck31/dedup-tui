@@ -28,6 +28,8 @@ dedup-tui <dir> --auto --apply  # non-interactive: keep most-original everywhere
 dedup-tui <rmlint.json>         # reuse an existing rmlint -D JSON report (skip scanning)
 ```
 
+`rmlint` is optional: when it is not on PATH the built-in engine is used (slower, no duplicate-directory detection) and a note is shown. On macOS: `brew install rmlint`.
+
 Options: `--exclude NAME` (extra dir to skip, repeatable) · `--no-rmlint` (force built-in engine) · `--no-verify` (skip the pre-removal re-hash).
 
 ## TUI keys

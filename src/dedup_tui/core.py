@@ -106,6 +106,12 @@ def have_rmlint() -> bool:
     return shutil.which("rmlint") is not None
 
 
+def rmlint_hint() -> str:
+    install = "brew install rmlint" if _IS_MAC else "see https://github.com/sahib/rmlint"
+    return (f"rmlint not found — using the slower built-in engine (no duplicate-directory detection). "
+            f"Install for best results: {install}")
+
+
 # Stats parsed from an rmlint JSON footer; .aborted flags an interrupted/partial scan.
 @dataclass(slots=True)
 class ScanStats:
@@ -269,7 +275,8 @@ def scan(target: str, excludes, prefer_rmlint=True, progress=None) -> tuple[list
         try:
             return scan_with_rmlint(target), "rmlint"
         except ScanError:
-            pass  # fall back to the built-in engine rather than report "no duplicates"
+            # fall back rather than report "no duplicates"; backend name surfaces the failure
+            return scan_builtin(target, excludes, progress=progress), "builtin (rmlint failed)"
     return scan_builtin(target, excludes, progress=progress), "builtin"
 
 

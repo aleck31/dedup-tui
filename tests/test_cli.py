@@ -43,3 +43,18 @@ def test_bad_target_exits(tmp_path):
     import pytest
     with pytest.raises(SystemExit):
         cli.main([str(tmp_path / "nope")])
+
+
+def test_hint_when_rmlint_missing(tree, capsys, monkeypatch):
+    from dedup_tui import core
+    tree("a", b"same"); tree("b", b"same")
+    monkeypatch.setattr(core, "have_rmlint", lambda: False)
+    cli.main([tree.root, "--auto"])
+    assert "rmlint not found" in capsys.readouterr().err
+
+
+def test_no_hint_with_no_rmlint_flag(tree, capsys, monkeypatch):
+    from dedup_tui import core
+    monkeypatch.setattr(core, "have_rmlint", lambda: False)
+    run(tree)
+    assert "rmlint not found" not in capsys.readouterr().err

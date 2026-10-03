@@ -76,7 +76,7 @@ def test_rmlint_failure_falls_back_to_builtin(tree, monkeypatch):
 
     monkeypatch.setattr(core, "scan_with_rmlint", boom)
     groups, backend = core.scan(tree.root, core.DEFAULT_EXCLUDES)
-    assert backend == "builtin" and len(groups) == 1
+    assert backend.startswith("builtin") and "failed" in backend and len(groups) == 1
 
 
 def test_scan_with_rmlint_raises_without_report(tree, monkeypatch):
