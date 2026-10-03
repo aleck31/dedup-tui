@@ -84,3 +84,10 @@ To pick up local edits when installed via `uv tool` (uv may reuse a cached build
 ```bash
 uv tool install --reinstall .          # or: uv cache clean dedup-tui && uv tool install --reinstall .
 ```
+
+## Development
+
+```bash
+uv sync
+uv run pytest
+```
